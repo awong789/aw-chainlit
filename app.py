@@ -1,9 +1,10 @@
 import os
+import asyncio
 import chainlit as cl
 import logging
 from dotenv import load_dotenv
-from azure.ai.projects import AIProjectClient
-from azure.identity import DefaultAzureCredential
+from azure.ai.projects.aio import AIProjectClient
+from azure.identity.aio import DefaultAzureCredential
 from azure.ai.agents.models import (
     AgentThreadCreationOptions,
     ThreadMessageOptions,
@@ -27,14 +28,9 @@ if not AIPROJECT_CONNECTION_STRING:
 if not AGENT_ID:
     raise ValueError("AGENT_ID environment variable is required")
 
-# Create an instance of the AIProjectClient using DefaultAzureCredential
-# Ensure the endpoint uses HTTPS
-endpoint = AIPROJECT_CONNECTION_STRING
-if not endpoint.startswith('https://'):
-    endpoint = f"https://{endpoint}"
-
+# Create an instance of the AIProjectClient using AsyncDefaultAzureCredential
 project_client = AIProjectClient(
-    endpoint=endpoint, credential=DefaultAzureCredential()
+    endpoint=AIPROJECT_CONNECTION_STRING, credential=DefaultAzureCredential()
 )
 
 
@@ -44,17 +40,33 @@ async def on_chat_start():
     if not AGENT_ID:
         raise ValueError("AGENT_ID environment variable is required")
 
+    print(f"agent Id: {AGENT_ID}")
     # Create a thread for the agent
     if not cl.user_session.get("thread_id"):
-        thread = project_client.agents.create_thread_and_process_run(
+        # thread = project_client.agents.create_thread_and_process_run(
+        #     agent_id=AGENT_ID,
+        #     thread=AgentThreadCreationOptions(
+        #         messages=[ThreadMessageOptions(role="user", content="Hi! Tell me your favorite programming joke.")]
+        #     ),
+        # )
+        run = await project_client.agents.create_thread_and_run(
             agent_id=AGENT_ID,
             thread=AgentThreadCreationOptions(
                 messages=[ThreadMessageOptions(role="user", content="Hi! Tell me your favorite programming joke.")]
-            ),
-        )
+            ))
+        
+        # Poll the run as long as run status is queued or in progress
+        while run.status in {"queued", "in_progress", "requires_action"}:
+            await asyncio.sleep(1)
+            run = await project_client.agents.runs.get(thread_id=run.thread_id, run_id=run.id)
 
-        cl.user_session.set("thread_id", thread.id)
-        print(f"New Thread ID: {thread.id}")
+            print(f"Run status: {run.status}")
+
+        if run.status == "failed":
+            print(f"Run error: {run.last_error}")
+
+        cl.user_session.set("thread_id", run.thread_id)
+        print(f"New Thread ID: {run.thread_id}")   
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -70,29 +82,39 @@ async def on_message(message: cl.Message):
         # Show thinking message to user
         msg = await cl.Message("thinking...", author="agent").send()
 
-        project_client.agents.messages.create(
-            thread_id=thread_id,
-            role="user",
-            content=message.content,
-        )
+        # await project_client.agents.messages.list(
+        #     thread_id=thread_id,
+        #     role="user",
+        #     content=message.content,
+        # )
         
-        # Run the agent to process tne message in the thread
-        run = project_client.agents.create_thread_and_process_run(thread_id=thread_id, agent_id=AGENT_ID)
-        print(f"Run finished with status: {run.status}")
+        # # Run the agent to process tne message in the thread
+        # run = await project_client.agents.create_thread_and_process_run(thread_id=thread_id, agent_id=AGENT_ID)
+        # print(f"Run finished with status: {run.status}")
 
-        # Check if you got "Rate limit is exceeded.", then you want to increase the token limit
-        if run.status == "failed":
-            raise Exception(run.last_error)
+        #  Check if you got "Rate limit is exceeded.", then you want to increase the token limit
+        # if run.status == "failed":
+            # raise Exception(run.last_error)
 
         # Get all messages from the thread
-        messages = project_client.agents.messages.list(thread_id=run.thread_id,
-            order=ListSortOrder.ASCENDING,)
+        messages = project_client.agents.messages.list(
+            thread_id=thread_id,
+            order=ListSortOrder.ASCENDING
+        )
 
         # Get the last message from the agent
-        last_msg = project_client.agents.messages.get_last_message_text_by_role(thread_id=run.thread_id,role=MessageRole.AGENT)
+        last_msg = await project_client.agents.messages.get_last_message_text_by_role(thread_id=thread_id, role=MessageRole.AGENT)
+        # last_msg = await project_client.agents.messages.get_last_message_text_by_role(thread_id=run.thread_id,role=MessageRole.AGENT)
         if not last_msg:
             raise Exception("No response from the model.")
 
+        # async for msg in messages:
+        #     last_part = msg.content[-1]
+        #     if isinstance(last_part, MessageTextContent):
+        #         print(f"{msg.role}: {last_part.text.value}")
+        #         msg.content = last_part.text.value
+
+        print(f"agent: {last_msg.text.value}")
         msg.content = last_msg.text.value
         await msg.update()
 
