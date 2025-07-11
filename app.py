@@ -85,7 +85,7 @@ async def on_message(message: cl.Message):
         # 1. Add user's message to the thread
         await project_client.agents.messages.create(
             thread_id=thread_id,
-            role="user",
+            role=MessageRole.USER,
             content=message.content,
         )
 
