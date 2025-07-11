@@ -69,7 +69,7 @@ async def on_chat_start():
         print(f"New Thread ID: {run.thread_id}")   
 
 @cl.on_message
-async def on_message(message: cl.Message):
+async def on_message(message: cl.Message): 
     thread_id = cl.user_session.get("thread_id")
     if not AGENT_ID:
         raise ValueError("AGENT_ID environment variable is required")
@@ -82,19 +82,19 @@ async def on_message(message: cl.Message):
         # Show thinking message to user
         msg = await cl.Message("thinking...", author="agent").send()
 
-        # await project_client.agents.messages.list(
-        #     thread_id=thread_id,
-        #     role="user",
-        #     content=message.content,
-        # )
-        
-        # # Run the agent to process tne message in the thread
-        # run = await project_client.agents.create_thread_and_process_run(thread_id=thread_id, agent_id=AGENT_ID)
-        # print(f"Run finished with status: {run.status}")
+        # 1. Add user's message to the thread
+        await project_client.agents.messages.create(
+            thread_id=thread_id,
+            role="user",
+            content=message.content,
+        )
 
-        #  Check if you got "Rate limit is exceeded.", then you want to increase the token limit
-        # if run.status == "failed":
-            # raise Exception(run.last_error)
+        # 2. Trigger the agent to process the new message
+        run = await project_client.agents.runs.create_and_process(
+            thread_id=thread_id,
+            agent_id=AGENT_ID,
+        )
+
 
         # Get all messages from the thread
         messages = project_client.agents.messages.list(
